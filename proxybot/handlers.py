@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import logging
 from urllib.parse import unquote, urlencode, urlparse
 
 from aiogram import F, Router
@@ -17,6 +18,10 @@ from .keyboards import (
     payment_keyboard,
     plans_keyboard,
 )
+
+logger = logging.getLogger(__name__)
+
+PROXY_FOOTER = "Made with @proxy_sdiki1_bot"
 
 
 def format_ts(timestamp: int) -> str:
@@ -95,12 +100,56 @@ def parse_socks5_url(link: str) -> tuple[str, int, str, str] | None:
     return parsed.hostname, parsed.port, unquote(parsed.username), unquote(parsed.password)
 
 
+async def send_proxy_message(
+    *,
+    db: Database,
+    bot,
+    bot_chat_id: int,
+    proxy_index: int,
+    user_proxy_label: str,
+    proxy_id: int,
+    tg_link: str,
+    user_id: int,
+    tg_user_id: int,
+    subscription_id: int | None,
+    device_number: int | None,
+    delivery_source: str,
+) -> None:
+    text = (
+        f"PROXY-{proxy_index}-{user_proxy_label}\n"
+        f"Proxy ID: {proxy_id}\n\n"
+        f"{tg_link}\n\n"
+        f"{PROXY_FOOTER}"
+    )
+    await bot.send_message(bot_chat_id, text, parse_mode=None)
+    await db.log_proxy_delivery(
+        proxy_link_id=proxy_id,
+        user_id=user_id,
+        tg_user_id=tg_user_id,
+        user_label=user_proxy_label,
+        subscription_id=subscription_id,
+        device_number=device_number,
+        delivery_source=delivery_source,
+        proxy_url=tg_link,
+    )
+    logger.info(
+        "Delivered proxy: tg_user_id=%s user_id=%s proxy_id=%s subscription_id=%s source=%s url=%s",
+        tg_user_id,
+        user_id,
+        proxy_id,
+        subscription_id,
+        delivery_source,
+        tg_link,
+    )
+
+
 async def send_links_list(
     *,
     db: Database,
     bot_chat_id: int,
     bot,
     user_id: int,
+    tg_user_id: int,
     user_proxy_label: str,
 ) -> None:
     links = await db.get_active_links_for_user(user_id)
@@ -126,8 +175,20 @@ async def send_links_list(
             continue
         host, port, username, password = parsed
         tg_link = telegram_socks_link(host, port, username, password)
-        text = f"PROXY-{index}-{user_proxy_label}\n\n{tg_link}"
-        await bot.send_message(bot_chat_id, text, parse_mode=None)
+        await send_proxy_message(
+            db=db,
+            bot=bot,
+            bot_chat_id=bot_chat_id,
+            proxy_index=index,
+            user_proxy_label=user_proxy_label,
+            proxy_id=int(row["id"]),
+            tg_link=tg_link,
+            user_id=user_id,
+            tg_user_id=tg_user_id,
+            subscription_id=int(row["subscription_id"]),
+            device_number=int(row["device_number"]),
+            delivery_source="my_links",
+        )
         sent_count += 1
     if sent_count == 0:
         await bot.send_message(
@@ -211,6 +272,7 @@ def create_router(db: Database, proxy_public_host: str) -> Router:
             bot_chat_id=message.chat.id,
             bot=message.bot,
             user_id=user_id,
+            tg_user_id=message.from_user.id,
             user_proxy_label=profile_label(message.from_user),
         )
 
@@ -243,6 +305,7 @@ def create_router(db: Database, proxy_public_host: str) -> Router:
             bot_chat_id=callback.from_user.id,
             bot=callback.bot,
             user_id=user_id,
+            tg_user_id=callback.from_user.id,
             user_proxy_label=profile_label(callback.from_user),
         )
         await callback.answer()
@@ -353,8 +416,20 @@ def create_router(db: Database, proxy_public_host: str) -> Router:
                 str(proxy["username"]),
                 str(proxy["password"]),
             )
-            text = f"PROXY-{index}-{user_proxy_label}\n\n{tg_link}"
-            await callback.bot.send_message(callback.from_user.id, text, parse_mode=None)
+            await send_proxy_message(
+                db=db,
+                bot=callback.bot,
+                bot_chat_id=callback.from_user.id,
+                proxy_index=index,
+                user_proxy_label=user_proxy_label,
+                proxy_id=int(proxy["proxy_id"]),
+                tg_link=tg_link,
+                user_id=user_id,
+                tg_user_id=callback.from_user.id,
+                subscription_id=subscription_id,
+                device_number=int(proxy["device_number"]),
+                delivery_source="purchase",
+            )
 
         await callback.bot.send_message(
             callback.from_user.id,

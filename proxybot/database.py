@@ -125,6 +125,19 @@ class Database:
                 updated_at INTEGER NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS proxy_delivery_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                proxy_link_id INTEGER NOT NULL REFERENCES proxy_links(id),
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                tg_user_id INTEGER NOT NULL,
+                user_label TEXT NOT NULL,
+                subscription_id INTEGER REFERENCES subscriptions(id),
+                device_number INTEGER,
+                delivery_source TEXT NOT NULL CHECK(delivery_source IN ('purchase', 'my_links')),
+                proxy_url TEXT NOT NULL,
+                delivered_at INTEGER NOT NULL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_users_tg_user_id ON users(tg_user_id);
             CREATE INDEX IF NOT EXISTS idx_payments_user_status ON payments(user_id, status);
             CREATE INDEX IF NOT EXISTS idx_subscriptions_user_status ON subscriptions(user_id, status);
@@ -132,6 +145,8 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_proxy_links_user_status ON proxy_links(user_id, status);
             CREATE INDEX IF NOT EXISTS idx_proxy_links_expires_at ON proxy_links(expires_at);
             CREATE INDEX IF NOT EXISTS idx_proxy_pool_status ON proxy_pool(status);
+            CREATE INDEX IF NOT EXISTS idx_proxy_delivery_logs_tg_user_id ON proxy_delivery_logs(tg_user_id);
+            CREATE INDEX IF NOT EXISTS idx_proxy_delivery_logs_proxy_link_id ON proxy_delivery_logs(proxy_link_id);
             """
         )
         await self.seed_plans()
@@ -381,6 +396,7 @@ class Database:
 
                 created.append(
                     {
+                        "proxy_id": link_id,
                         "device_number": device_number,
                         "port": port,
                         "username": username,
@@ -394,6 +410,47 @@ class Database:
         except Exception:
             await self.conn.rollback()
             raise
+
+    async def log_proxy_delivery(
+        self,
+        *,
+        proxy_link_id: int,
+        user_id: int,
+        tg_user_id: int,
+        user_label: str,
+        subscription_id: int | None,
+        device_number: int | None,
+        delivery_source: str,
+        proxy_url: str,
+    ) -> None:
+        await self.conn.execute(
+            """
+            INSERT INTO proxy_delivery_logs (
+                proxy_link_id,
+                user_id,
+                tg_user_id,
+                user_label,
+                subscription_id,
+                device_number,
+                delivery_source,
+                proxy_url,
+                delivered_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                proxy_link_id,
+                user_id,
+                tg_user_id,
+                user_label,
+                subscription_id,
+                device_number,
+                delivery_source,
+                proxy_url,
+                now_ts(),
+            ),
+        )
+        await self.conn.commit()
 
     async def get_active_links_for_user(self, user_id: int) -> list[dict[str, Any]]:
         timestamp = now_ts()
