@@ -117,3 +117,18 @@ def payment_keyboard(payment_id: int) -> InlineKeyboardMarkup:
             ],
         ]
     )
+
+
+def back_to_menu_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                _button(
+                    text="Вернуться в главное меню",
+                    callback_data="menu:home_clear",
+                    style="primary",
+                    icon_custom_emoji_id=EMOJI_SHIELD,
+                )
+            ]
+        ]
+    )
