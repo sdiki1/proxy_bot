@@ -36,6 +36,7 @@ def build_pool(start: int, end: int) -> list[dict[str, Any]]:
                 "port": port,
                 "username": f"u{port}",
                 "password": secrets.token_urlsafe(8),
+                "active": True,
             }
         )
     return pool
@@ -242,6 +243,25 @@ async def handle_client(
     )
 
 
+async def start_proxy_server(
+    bind_host: str,
+    item: dict[str, Any],
+) -> tuple[asyncio.base_events.Server | None, Exception | None]:
+    port = int(item["port"])
+    username = str(item["username"])
+    password = str(item["password"])
+    try:
+        server = await asyncio.start_server(
+            lambda r, w, u=username, p=password: handle_client(r, w, u, p),
+            host=bind_host,
+            port=port,
+            start_serving=True,
+        )
+        return server, None
+    except Exception as exc:
+        return None, exc
+
+
 async def main() -> None:
     bind_host = os.getenv("SOCKS_BIND_HOST", "0.0.0.0").strip() or "0.0.0.0"
     port_range = os.getenv("SOCKS_PORT_RANGE", "30000-30199").strip() or "30000-30199"
@@ -251,19 +271,35 @@ async def main() -> None:
     pool = load_or_create_pool(pool_file, start_port, end_port)
 
     servers: list[asyncio.base_events.Server] = []
-    for item in pool:
-        port = int(item["port"])
-        username = str(item["username"])
-        password = str(item["password"])
-        server = await asyncio.start_server(
-            lambda r, w, u=username, p=password: handle_client(r, w, u, p),
-            host=bind_host,
-            port=port,
-            start_serving=True,
-        )
-        servers.append(server)
+    start_results = await asyncio.gather(*(start_proxy_server(bind_host, item) for item in pool))
 
-    logger.info("SOCKS farm started on %s, ports %s (%d proxies)", bind_host, port_range, len(servers))
+    active_count = 0
+    skipped_count = 0
+    for item, (server, error) in zip(pool, start_results):
+        port = int(item["port"])
+        if server is not None:
+            item["active"] = True
+            servers.append(server)
+            active_count += 1
+            continue
+
+        item["active"] = False
+        skipped_count += 1
+        logger.warning("Skipping busy/unavailable port %s: %s", port, error)
+
+    pool_file.write_text(json.dumps(pool, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    logger.info(
+        "SOCKS farm started on %s, range %s (active=%d, skipped=%d)",
+        bind_host,
+        port_range,
+        active_count,
+        skipped_count,
+    )
+
+    if active_count == 0:
+        raise RuntimeError("No available ports to start SOCKS farm")
+
     await asyncio.Event().wait()
 
 

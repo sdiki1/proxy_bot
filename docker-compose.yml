@@ -4,6 +4,7 @@ services:
       context: .
       dockerfile: infra/socks/Dockerfile
     restart: unless-stopped
+    network_mode: host
     env_file:
       - .env
     environment:
@@ -12,8 +13,6 @@ services:
       SOCKS_POOL_FILE: /data/proxy_pool.json
     volumes:
       - ./data:/data
-    ports:
-      - "${SOCKS_PORT_RANGE:-30000-30199}:${SOCKS_PORT_RANGE:-30000-30199}"
 
   bot:
     build:

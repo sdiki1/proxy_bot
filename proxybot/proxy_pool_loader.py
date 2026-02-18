@@ -22,6 +22,10 @@ def load_proxy_pool(path: str) -> list[ProxyPoolEntry]:
         if not isinstance(item, dict):
             raise ValueError(f"Proxy item #{idx} must be object")
 
+        is_active = item.get("active", True)
+        if isinstance(is_active, bool) and not is_active:
+            continue
+
         port = item.get("port")
         username = item.get("username")
         password = item.get("password")
@@ -39,4 +43,3 @@ def load_proxy_pool(path: str) -> list[ProxyPoolEntry]:
         result.append(ProxyPoolEntry(port=port, username=username, password=password))
 
     return result
-

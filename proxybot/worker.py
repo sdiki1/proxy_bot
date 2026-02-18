@@ -37,8 +37,7 @@ async def proxy_pool_sync_worker(db: Database, pool_file: str, check_interval: i
     while True:
         try:
             pool = load_proxy_pool(pool_file)
-            if pool:
-                await db.sync_proxy_pool(pool)
+            await db.sync_proxy_pool(pool)
         except Exception:
             logger.exception("Proxy pool sync iteration failed")
 

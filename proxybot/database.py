@@ -179,9 +179,6 @@ class Database:
             )
 
     async def sync_proxy_pool(self, entries: list[ProxyPoolEntry]) -> None:
-        if not entries:
-            return
-
         timestamp = now_ts()
         for item in entries:
             await self.conn.execute(
@@ -194,6 +191,24 @@ class Database:
                     updated_at = excluded.updated_at
                 """,
                 (item.port, item.username, item.password, timestamp, timestamp),
+            )
+
+        ports = [item.port for item in entries]
+        if ports:
+            placeholders = ",".join("?" for _ in ports)
+            await self.conn.execute(
+                f"""
+                DELETE FROM proxy_pool
+                WHERE status = 'free' AND port NOT IN ({placeholders})
+                """,
+                tuple(ports),
+            )
+        else:
+            await self.conn.execute(
+                """
+                DELETE FROM proxy_pool
+                WHERE status = 'free'
+                """
             )
         await self.conn.commit()
 

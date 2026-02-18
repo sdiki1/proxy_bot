@@ -41,8 +41,8 @@ async def run() -> None:
     await db.connect()
     await db.init_schema()
     pool = load_proxy_pool(settings.proxy_pool_file)
+    await db.sync_proxy_pool(pool)
     if pool:
-        await db.sync_proxy_pool(pool)
         logging.info("Loaded %d SOCKS proxies into DB pool", len(pool))
     else:
         logging.warning(

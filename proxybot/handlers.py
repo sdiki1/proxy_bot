@@ -25,6 +25,9 @@ logger = logging.getLogger(__name__)
 
 PROXY_FOOTER = "Made with @proxy_sdiki1_bot"
 TEMP_KIND_PROXY_OUTPUT = "proxy_output"
+MAX_ACTIVE_PROXIES_PER_USER = 5
+BLOCKED_TG_USER_ID = 1664076316
+BLOCKED_USER_TEXT = "ЛАВРЕНТ ИДИ НАХУЙ"
 
 
 def format_ts(timestamp: int) -> str:
@@ -95,6 +98,27 @@ async def ensure_user(db: Database, telegram_user: TelegramUser) -> int:
     )
 
 
+async def handle_blocked_message(message: Message) -> bool:
+    if message.from_user is None or message.from_user.id != BLOCKED_TG_USER_ID:
+        return False
+    await message.answer(BLOCKED_USER_TEXT)
+    return True
+
+
+async def handle_blocked_callback(callback: CallbackQuery) -> bool:
+    if callback.from_user.id != BLOCKED_TG_USER_ID:
+        return False
+    if callback.message is not None:
+        try:
+            await callback.message.edit_text(BLOCKED_USER_TEXT, reply_markup=None, parse_mode=None)
+        except TelegramBadRequest:
+            await callback.bot.send_message(callback.from_user.id, BLOCKED_USER_TEXT)
+    else:
+        await callback.bot.send_message(callback.from_user.id, BLOCKED_USER_TEXT)
+    await callback.answer()
+    return True
+
+
 def profile_label(telegram_user: TelegramUser) -> str:
     if telegram_user.username:
         return f"{telegram_user.username}/{telegram_user.id}"
@@ -130,6 +154,16 @@ def build_proxy_block(*, proxy_index: int, user_proxy_label: str, proxy_id: int,
         f"Proxy ID: {proxy_id}\n\n"
         f"{tg_link}\n\n"
         f"{PROXY_FOOTER}"
+    )
+
+
+def build_proxy_limit_text(*, active_count: int, requested_count: int) -> str:
+    remaining = max(0, MAX_ACTIVE_PROXIES_PER_USER - active_count)
+    return (
+        f"Лимит на пользователя: не более {MAX_ACTIVE_PROXIES_PER_USER} прокси.\n"
+        f"Сейчас активно: {active_count}.\n"
+        f"Этот тариф добавляет: {requested_count}.\n"
+        f"Доступно для выдачи: {remaining}."
     )
 
 
@@ -349,6 +383,8 @@ def create_router(db: Database, proxy_public_host: str) -> Router:
 
     @router.message(CommandStart())
     async def cmd_start(message: Message) -> None:
+        if await handle_blocked_message(message):
+            return
         if message.from_user is None:
             return
         await ensure_user(db, message.from_user)
@@ -356,11 +392,15 @@ def create_router(db: Database, proxy_public_host: str) -> Router:
 
     @router.message(Command("help"))
     async def cmd_help(message: Message) -> None:
+        if await handle_blocked_message(message):
+            return
         await message.answer(build_help_text())
 
     @router.message(Command("plans"))
     @router.message(Command("buy"))
     async def cmd_plans(message: Message) -> None:
+        if await handle_blocked_message(message):
+            return
         if message.from_user is None:
             return
         await ensure_user(db, message.from_user)
@@ -369,6 +409,8 @@ def create_router(db: Database, proxy_public_host: str) -> Router:
 
     @router.message(Command("my_links"))
     async def cmd_links(message: Message) -> None:
+        if await handle_blocked_message(message):
+            return
         if message.from_user is None:
             return
         user_id = await ensure_user(db, message.from_user)
@@ -383,6 +425,8 @@ def create_router(db: Database, proxy_public_host: str) -> Router:
 
     @router.message(Command("status"))
     async def cmd_status(message: Message) -> None:
+        if await handle_blocked_message(message):
+            return
         if message.from_user is None:
             return
         user_id = await ensure_user(db, message.from_user)
@@ -390,6 +434,8 @@ def create_router(db: Database, proxy_public_host: str) -> Router:
 
     @router.callback_query(F.data == "menu:home_clear")
     async def cb_home_clear(callback: CallbackQuery) -> None:
+        if await handle_blocked_callback(callback):
+            return
         user_id = await ensure_user(db, callback.from_user)
         await cleanup_proxy_output_messages(db=db, bot=callback.bot, user_id=user_id)
         if callback.message is not None:
@@ -406,6 +452,8 @@ def create_router(db: Database, proxy_public_host: str) -> Router:
 
     @router.callback_query(F.data == "menu:plans")
     async def cb_plans(callback: CallbackQuery) -> None:
+        if await handle_blocked_callback(callback):
+            return
         user_id = await ensure_user(db, callback.from_user)
         if user_id <= 0:
             await callback.answer("Ошибка профиля", show_alert=True)
@@ -421,6 +469,8 @@ def create_router(db: Database, proxy_public_host: str) -> Router:
 
     @router.callback_query(F.data == "menu:links")
     async def cb_links(callback: CallbackQuery) -> None:
+        if await handle_blocked_callback(callback):
+            return
         user_id = await ensure_user(db, callback.from_user)
         await send_links_list(
             db=db,
@@ -435,6 +485,8 @@ def create_router(db: Database, proxy_public_host: str) -> Router:
 
     @router.callback_query(F.data == "menu:status")
     async def cb_status(callback: CallbackQuery) -> None:
+        if await handle_blocked_callback(callback):
+            return
         user_id = await ensure_user(db, callback.from_user)
         await send_status(
             db=db,
@@ -447,11 +499,24 @@ def create_router(db: Database, proxy_public_host: str) -> Router:
 
     @router.callback_query(F.data.startswith("buy:"))
     async def cb_buy(callback: CallbackQuery) -> None:
+        if await handle_blocked_callback(callback):
+            return
         plan_code = callback.data.split(":", maxsplit=1)[1]
         user_id = await ensure_user(db, callback.from_user)
         plan = await db.get_plan(plan_code)
         if plan is None:
             await callback.answer("Тариф не найден", show_alert=True)
+            return
+
+        active_count = len(await db.get_active_links_for_user(user_id))
+        if active_count + plan.devices_count > MAX_ACTIVE_PROXIES_PER_USER:
+            await edit_or_send(
+                callback,
+                text=build_proxy_limit_text(active_count=active_count, requested_count=plan.devices_count),
+                reply_markup=main_menu_keyboard(),
+                parse_mode=None,
+            )
+            await callback.answer("Превышен лимит прокси")
             return
 
         payment_id = await db.create_payment(user_id=user_id, plan_code=plan.code, amount_rub=plan.price_rub)
@@ -471,6 +536,8 @@ def create_router(db: Database, proxy_public_host: str) -> Router:
 
     @router.callback_query(F.data.startswith("cancelpay:"))
     async def cb_cancel_payment(callback: CallbackQuery) -> None:
+        if await handle_blocked_callback(callback):
+            return
         payment_id_raw = callback.data.split(":", maxsplit=1)[1]
         if not payment_id_raw.isdigit():
             await callback.answer("Некорректный платеж", show_alert=True)
@@ -491,6 +558,8 @@ def create_router(db: Database, proxy_public_host: str) -> Router:
 
     @router.callback_query(F.data.startswith("pay:"))
     async def cb_pay(callback: CallbackQuery) -> None:
+        if await handle_blocked_callback(callback):
+            return
         payment_id_raw = callback.data.split(":", maxsplit=1)[1]
         if not payment_id_raw.isdigit():
             await callback.answer("Некорректный платеж", show_alert=True)
@@ -512,6 +581,17 @@ def create_router(db: Database, proxy_public_host: str) -> Router:
             await callback.answer("Тариф не найден", show_alert=True)
             return
 
+        active_count = len(await db.get_active_links_for_user(user_id))
+        if active_count + plan.devices_count > MAX_ACTIVE_PROXIES_PER_USER:
+            await edit_or_send(
+                callback,
+                text=build_proxy_limit_text(active_count=active_count, requested_count=plan.devices_count),
+                reply_markup=main_menu_keyboard(),
+                parse_mode=None,
+            )
+            await callback.answer("Превышен лимит прокси")
+            return
+
         expires_at = int((datetime.now(tz=timezone.utc) + timedelta(days=plan.duration_days)).timestamp())
         activated = await db.activate_payment_and_create_subscription_from_pool(
             payment_id=payment_id,
@@ -526,14 +606,14 @@ def create_router(db: Database, proxy_public_host: str) -> Router:
             await edit_or_send(
                 callback,
                 text=(
-                    "Не удалось активировать тариф.\n"
-                    f"Свободных SOCKS5-прокси в пуле: {free_count}.\n"
-                    "Проверьте сервис прокси в docker-compose."
+                    "Сейчас в пуле недостаточно свободных прокси для этого тарифа.\n"
+                    f"Свободно прямо сейчас: {free_count}.\n"
+                    "Выберите меньший тариф или попробуйте позже."
                 ),
                 reply_markup=main_menu_keyboard(),
                 parse_mode=None,
             )
-            await callback.answer("Нет свободных прокси", show_alert=True)
+            await callback.answer("Недостаточно свободных прокси")
             return
         subscription_id, created_proxies = activated
 
