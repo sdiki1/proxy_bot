@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 @dataclass(frozen=True)
 class Settings:
     bot_token: str
+    database_url: str
     database_path: str
     proxy_public_host: str
     proxy_pool_file: str
@@ -31,6 +32,7 @@ def load_settings() -> Settings:
 
     return Settings(
         bot_token=bot_token,
+        database_url=os.getenv("DATABASE_URL", "").strip(),
         database_path=os.getenv("DATABASE_PATH", "bot.db").strip() or "bot.db",
         proxy_public_host=os.getenv("PROXY_PUBLIC_HOST", "127.0.0.1").strip() or "127.0.0.1",
         proxy_pool_file=os.getenv("PROXY_POOL_FILE", "data/proxy_pool.json").strip() or "data/proxy_pool.json",

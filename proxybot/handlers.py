@@ -27,7 +27,7 @@ PROXY_FOOTER = "Made with @proxy_sdiki1_bot"
 TEMP_KIND_PROXY_OUTPUT = "proxy_output"
 MAX_ACTIVE_PROXIES_PER_USER = 5
 BLOCKED_TG_USER_ID = 1664076316
-BLOCKED_USER_TEXT = "ЛАВРЕНТ ИДИ НАХУЙ"
+BLOCKED_USER_TEXT = "ЛАВРЕНТ ИДИ НАХУЙ, СУКА!\n\nЗа 25₽ мне на карту ты помилован"
 
 
 def format_ts(timestamp: int) -> str:
@@ -383,8 +383,7 @@ def create_router(db: Database, proxy_public_host: str) -> Router:
 
     @router.message(CommandStart())
     async def cmd_start(message: Message) -> None:
-        if await handle_blocked_message(message):
-            return
+        await handle_blocked_message(message)
         if message.from_user is None:
             return
         await ensure_user(db, message.from_user)
@@ -392,15 +391,13 @@ def create_router(db: Database, proxy_public_host: str) -> Router:
 
     @router.message(Command("help"))
     async def cmd_help(message: Message) -> None:
-        if await handle_blocked_message(message):
-            return
+        await handle_blocked_message(message)
         await message.answer(build_help_text())
 
     @router.message(Command("plans"))
     @router.message(Command("buy"))
     async def cmd_plans(message: Message) -> None:
-        if await handle_blocked_message(message):
-            return
+        await handle_blocked_message(message)
         if message.from_user is None:
             return
         await ensure_user(db, message.from_user)
@@ -409,8 +406,7 @@ def create_router(db: Database, proxy_public_host: str) -> Router:
 
     @router.message(Command("my_links"))
     async def cmd_links(message: Message) -> None:
-        if await handle_blocked_message(message):
-            return
+        await handle_blocked_message(message)
         if message.from_user is None:
             return
         user_id = await ensure_user(db, message.from_user)
@@ -425,8 +421,7 @@ def create_router(db: Database, proxy_public_host: str) -> Router:
 
     @router.message(Command("status"))
     async def cmd_status(message: Message) -> None:
-        if await handle_blocked_message(message):
-            return
+        await handle_blocked_message(message)
         if message.from_user is None:
             return
         user_id = await ensure_user(db, message.from_user)

@@ -15,7 +15,7 @@ Telegram-бот для продажи персональных SOCKS5-прокс
 - Срок действия каждой покупки — `30 дней`.
 - Истёкшие подписки автоматически деактивируются, пользователь получает уведомление.
 
-## docker-compose (бот + генерация SOCKS)
+## docker-compose (бот + PostgreSQL + генерация SOCKS)
 
 1. Создайте `.env`:
 
@@ -36,6 +36,7 @@ docker compose up -d --build
 
 Что поднимется:
 
+- `postgres` — основная БД бота (PostgreSQL).
 - `socks-farm` — сервис, который генерирует пул SOCKS5 (`port/login/password`) и запускает сами SOCKS5-прокси.
 - `bot` — Telegram-бот, который берёт прокси из этого пула и выдаёт пользователям.
 
@@ -47,7 +48,11 @@ docker compose up -d --build
 ## Переменные окружения
 
 - `BOT_TOKEN` — токен Telegram-бота
-- `DATABASE_PATH` — путь к SQLite БД бота
+- `DATABASE_URL` — DSN PostgreSQL (если указан, бот работает с Postgres)
+- `DATABASE_PATH` — путь к SQLite БД (fallback, когда `DATABASE_URL` пустой)
+- `POSTGRES_DB` — имя БД контейнера Postgres
+- `POSTGRES_USER` — пользователь Postgres
+- `POSTGRES_PASSWORD` — пароль Postgres
 - `PROXY_PUBLIC_HOST` — хост/IP, который бот вставляет в ссылки
 - `PROXY_POOL_FILE` — путь к JSON-пулу прокси
 - `EXPIRATION_CHECK_INTERVAL` — интервал проверки истечения (сек.)
@@ -63,6 +68,26 @@ docker compose up -d --build
 - `/buy` — выбрать тариф
 - `/my_links` — активные ссылки
 - `/status` — активные подписки и остаток времени
+
+## Миграция SQLite -> PostgreSQL
+
+Если у вас уже есть рабочая SQLite БД (`data/bot.db`), используйте скрипт:
+
+```bash
+python scripts/migrate_sqlite_to_postgres.py \
+  --sqlite-path data/bot.db \
+  --postgres-url postgresql://proxybot:proxybot@localhost:5432/proxybot
+```
+
+По умолчанию скрипт очищает целевые таблицы Postgres перед копированием (`TRUNCATE ... CASCADE`) и переносит данные с сохранением `id`.
+
+Через Docker (рекомендуется на сервере):
+
+```bash
+docker compose run --rm bot python scripts/migrate_sqlite_to_postgres.py \
+  --sqlite-path /data/bot.db \
+  --postgres-url postgresql://proxybot:proxybot@postgres:5432/proxybot
+```
 
 ## Локальный запуск без Docker
 

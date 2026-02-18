@@ -10,7 +10,7 @@ from aiogram.enums import ParseMode
 from aiogram.types import BotCommand
 
 from proxybot.config import load_settings
-from proxybot.database import Database
+from proxybot.database_factory import create_database
 from proxybot.handlers import create_router
 from proxybot.proxy_pool_loader import load_proxy_pool
 from proxybot.worker import expiration_worker, proxy_pool_sync_worker
@@ -37,7 +37,10 @@ async def run() -> None:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
-    db = Database(settings.database_path)
+    db = create_database(
+        database_url=settings.database_url,
+        database_path=settings.database_path,
+    )
     await db.connect()
     await db.init_schema()
     pool = load_proxy_pool(settings.proxy_pool_file)
