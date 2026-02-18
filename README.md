@@ -27,6 +27,7 @@ cp .env.example .env
 
 - `BOT_TOKEN` — токен бота
 - `SERVER_IP` — публичный IP вашего сервера
+- `ADMIN_TG_IDS` — ваш Telegram ID (или список через запятую)
 
 3. Запустите:
 
@@ -48,6 +49,7 @@ docker compose up -d --build
 ## Переменные окружения
 
 - `BOT_TOKEN` — токен Telegram-бота
+- `ADMIN_TG_IDS` — список Telegram ID админов через запятую, например `123,456`
 - `DATABASE_URL` — DSN PostgreSQL (если указан, бот работает с Postgres)
 - `DATABASE_PATH` — путь к SQLite БД (fallback, когда `DATABASE_URL` пустой)
 - `POSTGRES_DB` — имя БД контейнера Postgres
@@ -68,6 +70,7 @@ docker compose up -d --build
 - `/buy` — выбрать тариф
 - `/my_links` — активные ссылки
 - `/status` — активные подписки и остаток времени
+- `/admin` — админ-панель (только для `ADMIN_TG_IDS`)
 
 ## Миграция SQLite -> PostgreSQL
 

@@ -24,6 +24,7 @@ async def setup_bot_commands(bot: Bot) -> None:
             BotCommand(command="buy", description="Купить тариф"),
             BotCommand(command="my_links", description="Мои прокси"),
             BotCommand(command="status", description="Статус подписки"),
+            BotCommand(command="admin", description="Админ-панель"),
             BotCommand(command="help", description="Помощь"),
         ]
     )
@@ -59,7 +60,13 @@ async def run() -> None:
     )
     await setup_bot_commands(bot)
     dispatcher = Dispatcher()
-    dispatcher.include_router(create_router(db, settings.proxy_public_host))
+    dispatcher.include_router(
+        create_router(
+            db=db,
+            proxy_public_host=settings.proxy_public_host,
+            admin_tg_ids=settings.admin_tg_ids,
+        )
+    )
 
     worker_task = asyncio.create_task(
         expiration_worker(bot=bot, db=db, check_interval=settings.expiration_check_interval)

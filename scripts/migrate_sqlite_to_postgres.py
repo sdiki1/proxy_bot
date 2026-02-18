@@ -9,7 +9,6 @@ from pathlib import Path
 
 from proxybot.database_postgres import PostgresDatabase
 
-
 TABLES: list[tuple[str, list[str]]] = [
     ("plans", ["code", "title", "devices_count", "price_rub", "duration_days"]),
     ("users", ["id", "tg_user_id", "username", "first_name", "last_name", "created_at", "updated_at"]),
@@ -39,6 +38,7 @@ TABLES: list[tuple[str, list[str]]] = [
         ],
     ),
     ("user_temp_messages", ["id", "user_id", "tg_user_id", "message_id", "kind", "created_at"]),
+    ("banned_users", ["id", "tg_user_id", "reason", "blocked_by", "blocked_at"]),
 ]
 
 TABLES_WITH_ID = [
@@ -49,6 +49,7 @@ TABLES_WITH_ID = [
     "proxy_pool",
     "proxy_delivery_logs",
     "user_temp_messages",
+    "banned_users",
 ]
 
 
@@ -63,6 +64,7 @@ async def truncate_postgres(pg: PostgresDatabase) -> None:
                 proxy_links,
                 subscriptions,
                 payments,
+                banned_users,
                 users,
                 plans
             RESTART IDENTITY CASCADE
@@ -73,7 +75,12 @@ async def truncate_postgres(pg: PostgresDatabase) -> None:
 
 def read_sqlite_rows(conn: sqlite3.Connection, table: str, columns: list[str]) -> list[tuple]:
     query = f"SELECT {', '.join(columns)} FROM {table}"
-    rows = conn.execute(query).fetchall()
+    try:
+        rows = conn.execute(query).fetchall()
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc).lower():
+            return []
+        raise
     return [tuple(row[col] for col in columns) for row in rows]
 
 

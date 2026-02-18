@@ -148,6 +148,14 @@ class Database:
                 UNIQUE(user_id, message_id, kind)
             );
 
+            CREATE TABLE IF NOT EXISTS banned_users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tg_user_id INTEGER NOT NULL UNIQUE,
+                reason TEXT NOT NULL,
+                blocked_by INTEGER,
+                blocked_at INTEGER NOT NULL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_users_tg_user_id ON users(tg_user_id);
             CREATE INDEX IF NOT EXISTS idx_payments_user_status ON payments(user_id, status);
             CREATE INDEX IF NOT EXISTS idx_subscriptions_user_status ON subscriptions(user_id, status);
@@ -158,6 +166,7 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_proxy_delivery_logs_tg_user_id ON proxy_delivery_logs(tg_user_id);
             CREATE INDEX IF NOT EXISTS idx_proxy_delivery_logs_proxy_link_id ON proxy_delivery_logs(proxy_link_id);
             CREATE INDEX IF NOT EXISTS idx_user_temp_messages_user_kind ON user_temp_messages(user_id, kind);
+            CREATE INDEX IF NOT EXISTS idx_banned_users_tg_user_id ON banned_users(tg_user_id);
             """
         )
         await self.seed_plans()
@@ -242,6 +251,58 @@ class Database:
         if row is None:
             raise RuntimeError("Failed to upsert user.")
         return int(row["id"])
+
+    async def get_user_by_tg_user_id(self, tg_user_id: int) -> dict[str, Any] | None:
+        cursor = await self.conn.execute(
+            """
+            SELECT id, tg_user_id, username, first_name, last_name, created_at, updated_at
+            FROM users
+            WHERE tg_user_id = ?
+            """,
+            (tg_user_id,),
+        )
+        row = await cursor.fetchone()
+        await cursor.close()
+        return dict(row) if row is not None else None
+
+    async def get_all_tg_user_ids(self) -> list[int]:
+        cursor = await self.conn.execute(
+            """
+            SELECT tg_user_id
+            FROM users
+            ORDER BY id ASC
+            """
+        )
+        rows = await cursor.fetchall()
+        await cursor.close()
+        return [int(row["tg_user_id"]) for row in rows]
+
+    async def list_users_with_stats(self, limit: int = 200, offset: int = 0) -> list[dict[str, Any]]:
+        timestamp = now_ts()
+        cursor = await self.conn.execute(
+            """
+            SELECT
+                u.id,
+                u.tg_user_id,
+                u.username,
+                u.first_name,
+                u.last_name,
+                u.created_at,
+                u.updated_at,
+                SUM(CASE WHEN pl.status = 'active' AND pl.expires_at > ? THEN 1 ELSE 0 END) AS active_proxies,
+                CASE WHEN bu.tg_user_id IS NULL THEN 0 ELSE 1 END AS is_banned
+            FROM users u
+            LEFT JOIN proxy_links pl ON pl.user_id = u.id
+            LEFT JOIN banned_users bu ON bu.tg_user_id = u.tg_user_id
+            GROUP BY u.id, bu.tg_user_id
+            ORDER BY u.created_at DESC
+            LIMIT ? OFFSET ?
+            """,
+            (timestamp, max(1, limit), max(0, offset)),
+        )
+        rows = await cursor.fetchall()
+        await cursor.close()
+        return [dict(row) for row in rows]
 
     async def get_plan(self, code: str) -> Plan | None:
         cursor = await self.conn.execute(
@@ -518,6 +579,68 @@ class Database:
             await self.conn.commit()
         return [dict(row) for row in rows]
 
+    async def get_user_ban(self, tg_user_id: int) -> dict[str, Any] | None:
+        cursor = await self.conn.execute(
+            """
+            SELECT tg_user_id, reason, blocked_by, blocked_at
+            FROM banned_users
+            WHERE tg_user_id = ?
+            """,
+            (tg_user_id,),
+        )
+        row = await cursor.fetchone()
+        await cursor.close()
+        return dict(row) if row is not None else None
+
+    async def ban_user(self, tg_user_id: int, reason: str, blocked_by: int | None = None) -> None:
+        await self.conn.execute(
+            """
+            INSERT INTO banned_users (tg_user_id, reason, blocked_by, blocked_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(tg_user_id) DO UPDATE SET
+                reason = excluded.reason,
+                blocked_by = excluded.blocked_by,
+                blocked_at = excluded.blocked_at
+            """,
+            (tg_user_id, reason, blocked_by, now_ts()),
+        )
+        await self.conn.commit()
+
+    async def unban_user(self, tg_user_id: int) -> bool:
+        cursor = await self.conn.execute(
+            """
+            DELETE FROM banned_users
+            WHERE tg_user_id = ?
+            """,
+            (tg_user_id,),
+        )
+        await self.conn.commit()
+        return cursor.rowcount > 0
+
+    async def get_all_links_for_user(self, user_id: int) -> list[dict[str, Any]]:
+        cursor = await self.conn.execute(
+            """
+            SELECT
+                pl.id,
+                pl.subscription_id,
+                pl.device_number,
+                pl.link,
+                pl.status,
+                pl.created_at,
+                pl.expires_at,
+                p.title AS plan_title
+            FROM proxy_links pl
+            LEFT JOIN subscriptions s ON s.id = pl.subscription_id
+            LEFT JOIN plans p ON p.code = s.plan_code
+            WHERE pl.user_id = ?
+            ORDER BY pl.created_at DESC, pl.id DESC
+            """,
+            (user_id,),
+        )
+        rows = await cursor.fetchall()
+        await cursor.close()
+        return [dict(row) for row in rows]
+
     async def get_active_links_for_user(self, user_id: int) -> list[dict[str, Any]]:
         timestamp = now_ts()
         cursor = await self.conn.execute(
@@ -566,6 +689,115 @@ class Database:
         rows = await cursor.fetchall()
         await cursor.close()
         return [dict(row) for row in rows]
+
+    async def revoke_proxy_link_for_user(self, user_id: int, proxy_link_id: int) -> bool:
+        timestamp = now_ts()
+        await self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            cursor = await self.conn.execute(
+                """
+                SELECT id, subscription_id
+                FROM proxy_links
+                WHERE id = ? AND user_id = ? AND status = 'active'
+                """,
+                (proxy_link_id, user_id),
+            )
+            row = await cursor.fetchone()
+            await cursor.close()
+            if row is None:
+                await self.conn.rollback()
+                return False
+
+            subscription_id = int(row["subscription_id"])
+
+            await self.conn.execute(
+                """
+                UPDATE proxy_links
+                SET status = 'expired', expires_at = ?
+                WHERE id = ?
+                """,
+                (timestamp, proxy_link_id),
+            )
+            await self.conn.execute(
+                """
+                UPDATE proxy_pool
+                SET status = 'free', assigned_link_id = NULL, updated_at = ?
+                WHERE assigned_link_id = ?
+                """,
+                (timestamp, proxy_link_id),
+            )
+            await self.conn.execute(
+                """
+                UPDATE subscriptions
+                SET status = 'expired'
+                WHERE id = ? AND status = 'active' AND NOT EXISTS (
+                    SELECT 1
+                    FROM proxy_links
+                    WHERE subscription_id = ? AND status = 'active' AND expires_at > ?
+                )
+                """,
+                (subscription_id, subscription_id, timestamp),
+            )
+            await self.conn.commit()
+            return True
+        except Exception:
+            await self.conn.rollback()
+            raise
+
+    async def revoke_all_active_links_for_user(self, user_id: int) -> int:
+        timestamp = now_ts()
+        await self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            cursor = await self.conn.execute(
+                """
+                SELECT id
+                FROM proxy_links
+                WHERE user_id = ? AND status = 'active' AND expires_at > ?
+                """,
+                (user_id, timestamp),
+            )
+            rows = await cursor.fetchall()
+            await cursor.close()
+            if not rows:
+                await self.conn.rollback()
+                return 0
+
+            link_ids = [int(row["id"]) for row in rows]
+            placeholders = ",".join("?" for _ in link_ids)
+
+            await self.conn.execute(
+                f"""
+                UPDATE proxy_links
+                SET status = 'expired', expires_at = ?
+                WHERE id IN ({placeholders})
+                """,
+                (timestamp, *link_ids),
+            )
+            await self.conn.execute(
+                f"""
+                UPDATE proxy_pool
+                SET status = 'free', assigned_link_id = NULL, updated_at = ?
+                WHERE assigned_link_id IN ({placeholders})
+                """,
+                (timestamp, *link_ids),
+            )
+            await self.conn.execute(
+                """
+                UPDATE subscriptions
+                SET status = 'expired'
+                WHERE user_id = ? AND status = 'active' AND NOT EXISTS (
+                    SELECT 1
+                    FROM proxy_links
+                    WHERE subscription_id = subscriptions.id AND status = 'active' AND expires_at > ?
+                )
+                """,
+                (user_id, timestamp),
+            )
+            await self.conn.commit()
+            return len(link_ids)
+        except Exception:
+            await self.conn.rollback()
+            raise
 
     async def expire_due_and_get_notified_users(self) -> list[int]:
         timestamp = now_ts()

@@ -132,3 +132,42 @@ def back_to_menu_keyboard() -> InlineKeyboardMarkup:
             ]
         ]
     )
+
+
+def admin_panel_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                _button(text="1) Рассылка всем", callback_data="admin:broadcast_all", style="primary"),
+                _button(text="2) Рассылка юзеру", callback_data="admin:broadcast_user", style="primary"),
+            ],
+            [
+                _button(text="3) Забанить", callback_data="admin:ban", style="danger"),
+                _button(text="4) Разбанить", callback_data="admin:unban", style="success"),
+            ],
+            [
+                _button(text="5) Список юзеров", callback_data="admin:list_users"),
+            ],
+            [
+                _button(text="6) Конфиги юзера", callback_data="admin:user_configs"),
+            ],
+            [
+                _button(text="7) Начислить прокси", callback_data="admin:grant_proxies", style="success"),
+                _button(text="8) Удалить прокси", callback_data="admin:remove_proxies", style="danger"),
+            ],
+            [
+                _button(text="Закрыть", callback_data="admin:close"),
+            ],
+        ]
+    )
+
+
+def admin_cancel_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                _button(text="Отмена", callback_data="admin:cancel", style="danger"),
+                _button(text="Меню админа", callback_data="admin:menu", style="primary"),
+            ]
+        ]
+    )
