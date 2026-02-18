@@ -199,7 +199,13 @@ async def handle_client(
         if domain is None:
             writer.close()
             return
-        host = domain.decode("idna", errors="ignore")
+        try:
+            host = domain.decode("idna")
+        except UnicodeError:
+            writer.write(b"\x05\x04\x00\x01\x00\x00\x00\x00\x00\x00")
+            await writer.drain()
+            writer.close()
+            return
     elif atyp == 4:  # IPv6
         addr = await read_exact_or_none(reader, 16)
         if addr is None:

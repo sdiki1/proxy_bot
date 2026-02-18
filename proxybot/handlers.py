@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from html import escape
+from urllib.parse import unquote, urlencode, urlparse
 
 from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
@@ -53,12 +53,42 @@ async def ensure_user(db: Database, telegram_user: TelegramUser) -> int:
     )
 
 
+def profile_label(telegram_user: TelegramUser) -> str:
+    if telegram_user.username:
+        return f"{telegram_user.username}/{telegram_user.id}"
+    return str(telegram_user.id)
+
+
+def telegram_socks_link(server: str, port: int, username: str, password: str) -> str:
+    query = urlencode(
+        {
+            "server": server,
+            "port": port,
+            "user": username,
+            "pass": password,
+        }
+    )
+    return f"https://t.me/socks?{query}"
+
+
+def parse_socks5_url(link: str) -> tuple[str, int, str, str] | None:
+    parsed = urlparse(link)
+    if parsed.scheme != "socks5":
+        return None
+    if parsed.hostname is None or parsed.port is None:
+        return None
+    if parsed.username is None or parsed.password is None:
+        return None
+    return parsed.hostname, parsed.port, unquote(parsed.username), unquote(parsed.password)
+
+
 async def send_links_list(
     *,
     db: Database,
     bot_chat_id: int,
     bot,
     user_id: int,
+    user_proxy_label: str,
 ) -> None:
     links = await db.get_active_links_for_user(user_id)
     if not links:
@@ -69,19 +99,19 @@ async def send_links_list(
         )
         return
 
-    chunk_size = 5
-    for index in range(0, len(links), chunk_size):
-        chunk = links[index : index + chunk_size]
-        lines = ["Ваши активные ссылки:" if index == 0 else "Продолжение списка:"]
-        lines.append("")
-        for row in chunk:
-            lines.append(
-                f"Подписка #{row['subscription_id']} • устройство {row['device_number']} • "
-                f"до {format_ts(int(row['expires_at']))}"
-            )
-            lines.append(f"<code>{escape(row['link'])}</code>")
-            lines.append("")
-        await bot.send_message(bot_chat_id, "\n".join(lines))
+    await bot.send_message(bot_chat_id, "Ваши активные прокси:")
+    sent_count = 0
+    for index, row in enumerate(links, start=1):
+        parsed = parse_socks5_url(str(row["link"]))
+        if parsed is None:
+            continue
+        host, port, username, password = parsed
+        tg_link = telegram_socks_link(host, port, username, password)
+        text = f"PROXY-{index}-{user_proxy_label}\n\n{tg_link}"
+        await bot.send_message(bot_chat_id, text, parse_mode=None)
+        sent_count += 1
+    if sent_count == 0:
+        await bot.send_message(bot_chat_id, "Не удалось подготовить ссылки для Telegram из сохраненных прокси.")
 
 
 async def send_status(
@@ -151,7 +181,13 @@ def create_router(db: Database, proxy_public_host: str) -> Router:
         if message.from_user is None:
             return
         user_id = await ensure_user(db, message.from_user)
-        await send_links_list(db=db, bot_chat_id=message.chat.id, bot=message.bot, user_id=user_id)
+        await send_links_list(
+            db=db,
+            bot_chat_id=message.chat.id,
+            bot=message.bot,
+            user_id=user_id,
+            user_proxy_label=profile_label(message.from_user),
+        )
 
     @router.message(Command("status"))
     async def cmd_status(message: Message) -> None:
@@ -177,7 +213,13 @@ def create_router(db: Database, proxy_public_host: str) -> Router:
     @router.callback_query(F.data == "menu:links")
     async def cb_links(callback: CallbackQuery) -> None:
         user_id = await ensure_user(db, callback.from_user)
-        await send_links_list(db=db, bot_chat_id=callback.from_user.id, bot=callback.bot, user_id=user_id)
+        await send_links_list(
+            db=db,
+            bot_chat_id=callback.from_user.id,
+            bot=callback.bot,
+            user_id=user_id,
+            user_proxy_label=profile_label(callback.from_user),
+        )
         await callback.answer()
 
     @router.callback_query(F.data == "menu:status")
@@ -270,25 +312,29 @@ def create_router(db: Database, proxy_public_host: str) -> Router:
             return
         subscription_id, created_proxies = activated
 
-        lines = [
-            "Оплата подтверждена (заглушка).",
-            f"Подписка #{subscription_id} активна до {format_ts(expires_at)}.",
-            "",
-            "SOCKS5 для Telegram:",
-            "",
-        ]
-        for idx, proxy in enumerate(created_proxies, start=1):
-            lines.append(
-                f"{idx}. <code>{escape(proxy['link'])}</code>\n"
-                f"   host: <code>{escape(proxy_public_host)}</code> "
-                f"port: <code>{proxy['port']}</code> "
-                f"login: <code>{escape(proxy['username'])}</code> "
-                f"pass: <code>{escape(proxy['password'])}</code>"
-            )
-        lines.append("")
-        lines.append("Ссылки привязаны к вашему Telegram-профилю и действуют 30 дней.")
+        await callback.bot.send_message(
+            callback.from_user.id,
+            (
+                "Оплата подтверждена (заглушка).\n"
+                f"Подписка #{subscription_id} активна до {format_ts(expires_at)}."
+            ),
+        )
 
-        await callback.bot.send_message(callback.from_user.id, "\n".join(lines))
+        user_proxy_label = profile_label(callback.from_user)
+        for index, proxy in enumerate(created_proxies, start=1):
+            tg_link = telegram_socks_link(
+                proxy_public_host,
+                int(proxy["port"]),
+                str(proxy["username"]),
+                str(proxy["password"]),
+            )
+            text = f"PROXY-{index}-{user_proxy_label}\n\n{tg_link}"
+            await callback.bot.send_message(callback.from_user.id, text, parse_mode=None)
+
+        await callback.bot.send_message(
+            callback.from_user.id,
+            "Ссылки привязаны к вашему Telegram-профилю и действуют 30 дней.",
+        )
         await callback.answer("Готово")
 
     return router
