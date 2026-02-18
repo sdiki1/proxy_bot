@@ -24,6 +24,7 @@ from .keyboards import (
 logger = logging.getLogger(__name__)
 
 PROXY_FOOTER = "Made with @proxy_sdiki1_bot"
+TEMP_KIND_PROXY_OUTPUT = "proxy_output"
 
 
 def format_ts(timestamp: int) -> str:
@@ -165,6 +166,15 @@ async def log_proxy_delivery(
     )
 
 
+async def cleanup_proxy_output_messages(*, db: Database, bot, user_id: int) -> None:
+    rows = await db.pop_temp_messages(user_id=user_id, kind=TEMP_KIND_PROXY_OUTPUT)
+    for row in rows:
+        try:
+            await bot.delete_message(int(row["tg_user_id"]), int(row["message_id"]))
+        except TelegramBadRequest:
+            pass
+
+
 async def edit_or_send(
     callback: CallbackQuery,
     *,
@@ -190,7 +200,7 @@ async def send_links_list(
     user_id: int,
     tg_user_id: int,
     user_proxy_label: str,
-    edit_message: Message | None = None,
+    source_message: Message | None = None,
 ) -> None:
     links = await db.get_active_links_for_user(user_id)
     if not links:
@@ -198,14 +208,13 @@ async def send_links_list(
             f"{tg_emoji(EMOJI_DEV, '📱')} У вас пока нет активных прокси.\n"
             "Выберите тариф через /buy или кнопку «Тарифы»."
         )
-        if edit_message is not None:
-            await edit_message.edit_text(text, reply_markup=main_menu_keyboard())
+        if source_message is not None:
+            await source_message.edit_text(text, reply_markup=main_menu_keyboard())
         else:
             await bot.send_message(bot_chat_id, text, reply_markup=main_menu_keyboard())
         return
 
-    blocks: list[str] = []
-    deliveries: list[dict[str, int | str | None]] = []
+    proxies: list[dict[str, int | str | None]] = []
     for index, row in enumerate(links, start=1):
         parsed = parse_socks5_url(str(row["link"]))
         if parsed is None:
@@ -213,50 +222,94 @@ async def send_links_list(
         host, port, username, password = parsed
         tg_link = telegram_socks_link(host, port, username, password)
         proxy_id = int(row["id"])
-
-        blocks.append(
-            build_proxy_block(
-                proxy_index=index,
-                user_proxy_label=user_proxy_label,
-                proxy_id=proxy_id,
-                tg_link=tg_link,
-            )
-        )
-        deliveries.append(
+        proxies.append(
             {
+                "index": index,
                 "proxy_id": proxy_id,
+                "tg_link": tg_link,
                 "subscription_id": int(row["subscription_id"]),
                 "device_number": int(row["device_number"]),
-                "tg_link": tg_link,
             }
         )
 
-    if not blocks:
-        text = "Не удалось подготовить ссылки для Telegram из сохраненных прокси."
-        if edit_message is not None:
-            await edit_message.edit_text(text, reply_markup=main_menu_keyboard())
-        else:
-            await bot.send_message(bot_chat_id, text, reply_markup=main_menu_keyboard())
+    await send_proxy_sequence(
+        db=db,
+        bot=bot,
+        bot_chat_id=bot_chat_id,
+        user_id=user_id,
+        tg_user_id=tg_user_id,
+        user_proxy_label=user_proxy_label,
+        proxies=proxies,
+        delivery_source="my_links",
+        source_message=source_message,
+    )
+
+
+async def send_proxy_sequence(
+    *,
+    db: Database,
+    bot,
+    bot_chat_id: int,
+    user_id: int,
+    tg_user_id: int,
+    user_proxy_label: str,
+    proxies: list[dict[str, int | str | None]],
+    delivery_source: str,
+    source_message: Message | None = None,
+) -> None:
+    await cleanup_proxy_output_messages(db=db, bot=bot, user_id=user_id)
+
+    if source_message is not None:
+        try:
+            await source_message.delete()
+        except TelegramBadRequest:
+            pass
+
+    if not proxies:
+        await bot.send_message(
+            bot_chat_id,
+            "Не удалось подготовить ссылки для Telegram из сохраненных прокси.",
+            reply_markup=main_menu_keyboard(),
+        )
         return
 
-    text = "💎 Ваши активные прокси\n\n" + "\n\n".join(blocks)
-    if edit_message is not None:
-        await edit_message.edit_text(text, parse_mode=None, reply_markup=back_to_menu_keyboard())
-    else:
-        await bot.send_message(bot_chat_id, text, parse_mode=None, reply_markup=back_to_menu_keyboard())
-
-    for item in deliveries:
+    for item in proxies:
+        text = build_proxy_block(
+            proxy_index=int(item["index"]),
+            user_proxy_label=user_proxy_label,
+            proxy_id=int(item["proxy_id"]),
+            tg_link=str(item["tg_link"]),
+        )
+        sent = await bot.send_message(bot_chat_id, text, parse_mode=None)
+        await db.add_temp_message(
+            user_id=user_id,
+            tg_user_id=tg_user_id,
+            message_id=sent.message_id,
+            kind=TEMP_KIND_PROXY_OUTPUT,
+        )
         await log_proxy_delivery(
             db=db,
             proxy_id=int(item["proxy_id"]),
             user_id=user_id,
             tg_user_id=tg_user_id,
             user_proxy_label=user_proxy_label,
-            subscription_id=int(item["subscription_id"]),
-            device_number=int(item["device_number"]),
-            delivery_source="my_links",
+            subscription_id=int(item["subscription_id"]) if item["subscription_id"] is not None else None,
+            device_number=int(item["device_number"]) if item["device_number"] is not None else None,
+            delivery_source=delivery_source,
             tg_link=str(item["tg_link"]),
         )
+
+    control = await bot.send_message(
+        bot_chat_id,
+        "Перейти в главное меню:",
+        reply_markup=back_to_menu_keyboard(),
+    )
+    await db.add_temp_message(
+        user_id=user_id,
+        tg_user_id=tg_user_id,
+        message_id=control.message_id,
+        kind=TEMP_KIND_PROXY_OUTPUT,
+    )
 
 
 async def send_status(
@@ -337,6 +390,8 @@ def create_router(db: Database, proxy_public_host: str) -> Router:
 
     @router.callback_query(F.data == "menu:home_clear")
     async def cb_home_clear(callback: CallbackQuery) -> None:
+        user_id = await ensure_user(db, callback.from_user)
+        await cleanup_proxy_output_messages(db=db, bot=callback.bot, user_id=user_id)
         if callback.message is not None:
             try:
                 await callback.message.delete()
@@ -374,7 +429,7 @@ def create_router(db: Database, proxy_public_host: str) -> Router:
             user_id=user_id,
             tg_user_id=callback.from_user.id,
             user_proxy_label=profile_label(callback.from_user),
-            edit_message=callback.message,
+            source_message=callback.message,
         )
         await callback.answer()
 
@@ -483,7 +538,7 @@ def create_router(db: Database, proxy_public_host: str) -> Router:
         subscription_id, created_proxies = activated
 
         user_proxy_label = profile_label(callback.from_user)
-        blocks: list[str] = []
+        proxies: list[dict[str, int | str | None]] = []
         for index, proxy in enumerate(created_proxies, start=1):
             tg_link = telegram_socks_link(
                 proxy_public_host,
@@ -492,36 +547,26 @@ def create_router(db: Database, proxy_public_host: str) -> Router:
                 str(proxy["password"]),
             )
             proxy_id = int(proxy["proxy_id"])
-            blocks.append(
-                build_proxy_block(
-                    proxy_index=index,
-                    user_proxy_label=user_proxy_label,
-                    proxy_id=proxy_id,
-                    tg_link=tg_link,
-                )
-            )
-            await log_proxy_delivery(
-                db=db,
-                proxy_id=proxy_id,
-                user_id=user_id,
-                tg_user_id=callback.from_user.id,
-                user_proxy_label=user_proxy_label,
-                subscription_id=subscription_id,
-                device_number=int(proxy["device_number"]),
-                delivery_source="purchase",
-                tg_link=tg_link,
+            proxies.append(
+                {
+                    "index": index,
+                    "proxy_id": proxy_id,
+                    "tg_link": tg_link,
+                    "subscription_id": subscription_id,
+                    "device_number": int(proxy["device_number"]),
+                }
             )
 
-        text = (
-            f"Оплата подтверждена.\nПодписка #{subscription_id} активна до {format_ts(expires_at)}.\n\n"
-            + "\n\n".join(blocks)
-        )
-
-        await edit_or_send(
-            callback,
-            text=text,
-            reply_markup=back_to_menu_keyboard(),
-            parse_mode=None,
+        await send_proxy_sequence(
+            db=db,
+            bot=callback.bot,
+            bot_chat_id=callback.from_user.id,
+            user_id=user_id,
+            tg_user_id=callback.from_user.id,
+            user_proxy_label=user_proxy_label,
+            proxies=proxies,
+            delivery_source="purchase",
+            source_message=callback.message,
         )
         await callback.answer("Готово")
 

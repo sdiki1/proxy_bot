@@ -138,6 +138,16 @@ class Database:
                 delivered_at INTEGER NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS user_temp_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                tg_user_id INTEGER NOT NULL,
+                message_id INTEGER NOT NULL,
+                kind TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                UNIQUE(user_id, message_id, kind)
+            );
+
             CREATE INDEX IF NOT EXISTS idx_users_tg_user_id ON users(tg_user_id);
             CREATE INDEX IF NOT EXISTS idx_payments_user_status ON payments(user_id, status);
             CREATE INDEX IF NOT EXISTS idx_subscriptions_user_status ON subscriptions(user_id, status);
@@ -147,6 +157,7 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_proxy_pool_status ON proxy_pool(status);
             CREATE INDEX IF NOT EXISTS idx_proxy_delivery_logs_tg_user_id ON proxy_delivery_logs(tg_user_id);
             CREATE INDEX IF NOT EXISTS idx_proxy_delivery_logs_proxy_link_id ON proxy_delivery_logs(proxy_link_id);
+            CREATE INDEX IF NOT EXISTS idx_user_temp_messages_user_kind ON user_temp_messages(user_id, kind);
             """
         )
         await self.seed_plans()
@@ -451,6 +462,46 @@ class Database:
             ),
         )
         await self.conn.commit()
+
+    async def add_temp_message(
+        self,
+        *,
+        user_id: int,
+        tg_user_id: int,
+        message_id: int,
+        kind: str,
+    ) -> None:
+        await self.conn.execute(
+            """
+            INSERT OR IGNORE INTO user_temp_messages (user_id, tg_user_id, message_id, kind, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (user_id, tg_user_id, message_id, kind, now_ts()),
+        )
+        await self.conn.commit()
+
+    async def pop_temp_messages(self, *, user_id: int, kind: str) -> list[dict[str, Any]]:
+        cursor = await self.conn.execute(
+            """
+            SELECT id, tg_user_id, message_id
+            FROM user_temp_messages
+            WHERE user_id = ? AND kind = ?
+            ORDER BY id ASC
+            """,
+            (user_id, kind),
+        )
+        rows = await cursor.fetchall()
+        await cursor.close()
+        if rows:
+            await self.conn.execute(
+                """
+                DELETE FROM user_temp_messages
+                WHERE user_id = ? AND kind = ?
+                """,
+                (user_id, kind),
+            )
+            await self.conn.commit()
+        return [dict(row) for row in rows]
 
     async def get_active_links_for_user(self, user_id: int) -> list[dict[str, Any]]:
         timestamp = now_ts()
