@@ -8,6 +8,8 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-proxybot}
       POSTGRES_USER: ${POSTGRES_USER:-proxybot}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-proxybot}
+    ports:
+      - "${POSTGRES_BIND_HOST:-0.0.0.0}:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:

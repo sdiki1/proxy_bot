@@ -40,6 +40,7 @@ docker compose up -d --build
 - `postgres` — основная БД бота (PostgreSQL).
 - `socks-farm` — сервис, который генерирует пул SOCKS5 (`port/login/password`) и запускает сами SOCKS5-прокси.
 - `bot` — Telegram-бот, который берёт прокси из этого пула и выдаёт пользователям.
+- Порт Postgres публикуется наружу: `${POSTGRES_BIND_HOST}:${POSTGRES_PORT}` (по умолчанию `0.0.0.0:5432`).
 
 Важно:
 - В `docker-compose` для `socks-farm` используется `network_mode: host` (Linux VDS) — это заметно ускоряет старт больших диапазонов (например, 1000 портов).
@@ -55,6 +56,8 @@ docker compose up -d --build
 - `POSTGRES_DB` — имя БД контейнера Postgres
 - `POSTGRES_USER` — пользователь Postgres
 - `POSTGRES_PASSWORD` — пароль Postgres
+- `POSTGRES_PORT` — порт Postgres на хосте
+- `POSTGRES_BIND_HOST` — адрес bind для публикации порта (например `0.0.0.0` или `127.0.0.1`)
 - `PROXY_PUBLIC_HOST` — хост/IP, который бот вставляет в ссылки
 - `PROXY_POOL_FILE` — путь к JSON-пулу прокси
 - `EXPIRATION_CHECK_INTERVAL` — интервал проверки истечения (сек.)
