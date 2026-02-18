@@ -7,12 +7,26 @@ import logging
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.types import BotCommand
 
 from proxybot.config import load_settings
 from proxybot.database import Database
 from proxybot.handlers import create_router
 from proxybot.proxy_pool_loader import load_proxy_pool
 from proxybot.worker import expiration_worker, proxy_pool_sync_worker
+
+
+async def setup_bot_commands(bot: Bot) -> None:
+    await bot.set_my_commands(
+        [
+            BotCommand(command="start", description="Главное меню"),
+            BotCommand(command="plans", description="Тарифы"),
+            BotCommand(command="buy", description="Купить тариф"),
+            BotCommand(command="my_links", description="Мои прокси"),
+            BotCommand(command="status", description="Статус подписки"),
+            BotCommand(command="help", description="Помощь"),
+        ]
+    )
 
 
 async def run() -> None:
@@ -40,6 +54,7 @@ async def run() -> None:
         token=settings.bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
+    await setup_bot_commands(bot)
     dispatcher = Dispatcher()
     dispatcher.include_router(create_router(db, settings.proxy_public_host))
 

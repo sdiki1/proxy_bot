@@ -8,7 +8,15 @@ from aiogram.filters import Command, CommandStart
 from aiogram.types import CallbackQuery, Message, User as TelegramUser
 
 from .database import Database, Plan
-from .keyboards import main_menu_keyboard, payment_stub_keyboard, plans_keyboard
+from .keyboards import (
+    EMOJI_BOX,
+    EMOJI_DEV,
+    EMOJI_GEM,
+    EMOJI_SHIELD,
+    main_menu_keyboard,
+    payment_keyboard,
+    plans_keyboard,
+)
 
 
 def format_ts(timestamp: int) -> str:
@@ -27,18 +35,23 @@ def format_remaining(expires_at: int) -> str:
     return f"{hours} ч."
 
 
+def tg_emoji(emoji_id: str, fallback: str) -> str:
+    return f'<tg-emoji emoji-id="{emoji_id}">{fallback}</tg-emoji>'
+
+
 def build_plans_text(plans: list[Plan]) -> str:
     lines = [
-        "Тарифы:",
+        f"{tg_emoji(EMOJI_SHIELD, '🛡')} <b>Тарифы ProxyBot</b>",
+        "",
+        "Выберите подходящий план на <b>30 дней</b>:",
         "",
     ]
     for plan in plans:
-        lines.append(f"• {plan.title}: <b>{plan.price_rub}₽ / мес</b>")
+        lines.append(f"• <b>{plan.title}</b> — <b>{plan.price_rub}₽ / мес</b>")
     lines.extend(
         [
             "",
-            "Срок действия каждой покупки: <b>30 дней</b>.",
-            "Оплата сейчас работает в режиме <b>заглушки</b>.",
+            f"{tg_emoji(EMOJI_GEM, '💎')} После подтверждения оплаты прокси выдаются сразу.",
         ]
     )
     return "\n".join(lines)
@@ -94,12 +107,18 @@ async def send_links_list(
     if not links:
         await bot.send_message(
             bot_chat_id,
-            "У вас пока нет активных прокси-ссылок.\nВыберите тариф через /buy или кнопку «Тарифы и покупка».",
+            (
+                f"{tg_emoji(EMOJI_DEV, '📱')} У вас пока нет активных прокси.\n"
+                "Выберите тариф через /buy или кнопку «Тарифы»."
+            ),
             reply_markup=main_menu_keyboard(),
         )
         return
 
-    await bot.send_message(bot_chat_id, "Ваши активные прокси:")
+    await bot.send_message(
+        bot_chat_id,
+        f"{tg_emoji(EMOJI_GEM, '💎')} <b>Ваши активные прокси</b>",
+    )
     sent_count = 0
     for index, row in enumerate(links, start=1):
         parsed = parse_socks5_url(str(row["link"]))
@@ -111,7 +130,10 @@ async def send_links_list(
         await bot.send_message(bot_chat_id, text, parse_mode=None)
         sent_count += 1
     if sent_count == 0:
-        await bot.send_message(bot_chat_id, "Не удалось подготовить ссылки для Telegram из сохраненных прокси.")
+        await bot.send_message(
+            bot_chat_id,
+            "Не удалось подготовить ссылки для Telegram из сохраненных прокси.",
+        )
 
 
 async def send_status(
@@ -125,12 +147,12 @@ async def send_status(
     if not subscriptions:
         await bot.send_message(
             bot_chat_id,
-            "У вас нет активной подписки.\nОформите тариф через /buy.",
+            f"{tg_emoji(EMOJI_BOX, '📦')} У вас нет активной подписки.\nОформите тариф через /buy.",
             reply_markup=main_menu_keyboard(),
         )
         return
 
-    lines = ["Активные подписки:", ""]
+    lines = [f"{tg_emoji(EMOJI_BOX, '📦')} <b>Активные подписки</b>", ""]
     for sub in subscriptions:
         expires_at = int(sub["expires_at"])
         lines.append(
@@ -150,9 +172,10 @@ def create_router(db: Database, proxy_public_host: str) -> Router:
         await ensure_user(db, message.from_user)
         await message.answer(
             (
-                "ProxyBot выдает персональные SOCKS5-прокси, привязанные к вашему Telegram-профилю.\n"
-                "Каждая покупка действует 30 дней.\n"
-                "Оплата сейчас работает как заглушка: подтверждение вручную кнопкой."
+                f"{tg_emoji(EMOJI_SHIELD, '🛡')} <b>ProxyBot</b> выдает персональные SOCKS5-прокси,\n"
+                "привязанные к вашему Telegram-профилю.\n\n"
+                f"{tg_emoji(EMOJI_GEM, '💎')} Каждая покупка действует <b>30 дней</b>.\n"
+                f"{tg_emoji(EMOJI_DEV, '📱')} Подключение в Telegram — в пару кликов."
             ),
             reply_markup=main_menu_keyboard(),
         )
@@ -160,11 +183,13 @@ def create_router(db: Database, proxy_public_host: str) -> Router:
     @router.message(Command("help"))
     async def cmd_help(message: Message) -> None:
         await message.answer(
+            f"{tg_emoji(EMOJI_SHIELD, '🛡')} <b>Команды бота</b>\n\n"
             "/start — главное меню\n"
-            "/plans — показать тарифы\n"
-            "/buy — выбрать тариф\n"
-            "/my_links — активные ссылки\n"
-            "/status — состояние подписки"
+            "/plans — тарифы\n"
+            "/buy — купить тариф\n"
+            "/my_links — мои прокси\n"
+            "/status — подписка\n"
+            "/help — помощь"
         )
 
     @router.message(Command("plans"))
@@ -241,13 +266,13 @@ def create_router(db: Database, proxy_public_host: str) -> Router:
         await callback.bot.send_message(
             callback.from_user.id,
             (
-                "Заявка на оплату создана.\n\n"
+                f"{tg_emoji(EMOJI_GEM, '💎')} <b>Заявка на оплату создана</b>\n\n"
                 f"Тариф: <b>{plan.title}</b>\n"
                 f"Сумма: <b>{plan.price_rub}₽</b>\n"
                 f"ID платежа: <code>{payment_id}</code>\n\n"
-                "Сейчас это заглушка: нажмите «Оплатил», чтобы симулировать успешный платеж."
+                "Нажмите «Подтвердить оплату», чтобы активировать тариф."
             ),
-            reply_markup=payment_stub_keyboard(payment_id),
+            reply_markup=payment_keyboard(payment_id),
         )
         await callback.answer()
 
@@ -315,7 +340,7 @@ def create_router(db: Database, proxy_public_host: str) -> Router:
         await callback.bot.send_message(
             callback.from_user.id,
             (
-                "Оплата подтверждена (заглушка).\n"
+                f"{tg_emoji(EMOJI_GEM, '💎')} Оплата подтверждена.\n"
                 f"Подписка #{subscription_id} активна до {format_ts(expires_at)}."
             ),
         )
@@ -333,7 +358,10 @@ def create_router(db: Database, proxy_public_host: str) -> Router:
 
         await callback.bot.send_message(
             callback.from_user.id,
-            "Ссылки привязаны к вашему Telegram-профилю и действуют 30 дней.",
+            (
+                f"{tg_emoji(EMOJI_SHIELD, '🛡')} Ссылки привязаны к вашему Telegram-профилю.\n"
+                "Срок действия: 30 дней."
+            ),
         )
         await callback.answer("Готово")
 
